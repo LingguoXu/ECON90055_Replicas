@@ -1,0 +1,140 @@
+---
+title: "Replica 2 Code"
+author: Lingguo Xu
+output: pdf_document
+---
+```{r,  message=FALSE, `results = FALSE`}
+library(tidytext)
+library(topicmodels)
+library(qdapTools)
+library(quanteda)
+library(SnowballC)
+library(dplyr)
+library(rlist)
+library(pipeR)
+library(ggplot2)
+library(knitr)
+# Chagne this to the path with dataset 'survey_response_data.csv'
+setwd("C:/Users/quest/OneDrive - The University of Melbourne/ECON90055/Replicas_Lin")
+```
+
+```{r setup, include = FALSE, cache = FALSE}
+opts_chunk$set(fig.width = 5, fig.height = 3)
+```
+
+```{r} 
+## Data import and cleaning
+# First we load csv data
+ceocsv = read.csv("survey_response_data.csv", stringsAsFactors = FALSE)
+# Only keep CEO's interacting time, excluding time they spent afterwork 
+ceocsv <- subset(ceocsv, type != "personal_family" & level1 == "interacting")
+# Only keep the last column, which is the five-feature combined label for activities
+ceocsv <- ceocsv[c(1, 42)]
+```
+
+
+
+```{r}
+## The creation of text corpus and Document-term-matrix (DTM)
+# Create a text file with each CEO has only one row entry that includes all
+# activities, seperated with comma
+ceotext <- ceocsv %>% 
+  group_by(id) %>% 
+  summarise(allcombined = paste(all_combined, collapse=", "))
+write.table(ceotext,"ceotext.txt", row.names = FALSE, sep="\t")
+
+# Read text data
+ceotext <- read.delim("ceotext.txt", stringsAsFactors = FALSE)
+
+# Create corpus (cps) and document-feature-matrix
+cps <- corpus(ceotext$allcombined)
+mystop <- c(",")
+ceodtm <- dfm(cps, remove = mystop)
+
+# Final preparation, only choose activities that occured more than 30
+# times in all CEO diary
+ceodtm <- ceodtm[rowSums(ceodtm) != 0, colSums(ceodtm) > 30]
+ceodtm <- ceodtm[rowSums(ceodtm) != 0, colSums(ceodtm) > 30] 
+# Have to run this code twice to avoid error in next section
+
+# need to convert ceodtm from dfm to `real' DTM
+ceodtm <- as.DocumentTermMatrix(ceodtm) 
+# view(ceodtm)
+# cc <- colSums(ceodtm != 0) # left with only 127 activities
+```
+
+
+
+```{r}
+## Running LDA algorithm, this will take about 20 seconds
+# Using Gibbs method with hyperparameter for theta_i as 1 and prior for 
+# beta^k as 0.1, use same specification as with the original
+ceolda <- LDA(ceodtm, k = 2, method = "Gibbs", control = list(seed = 1234, alpha = 1,
+              delta = 0.1, burnin = 10000, thin = 50, iter = 160))
+
+# Compute perplexity score to evaluate model performance, use same dataset, no need
+# to estimate theta. The perplexity score is close with what the author get in Chain1
+# no need to run several chains like in paper, as perplexsity does not change much
+perplex_lda <- perplexity(ceolda, ceodtm, control, use_theta = TRUE, 
+                          estimate_theta = FALSE)
+```
+
+
+
+```{r}
+## Prepare output for figure replication
+# Seperate out beta matrix: probability distribution of activities for CEO 
+# Type 0 and Type 1
+ldaterms <- tidy(ceolda, matrix = "beta")
+terms_ord <- subset(ldaterms, topic==1)
+names(terms_ord)[3] <- "beta0"
+terms_ord$beta1 <-subset(ldaterms, topic==2)$beta
+terms_ord$topic <- 1:length(terms_ord$term)
+names(ldaterms)[1] <- "activity"
+# Ordered activities by their prob. in Type 0, like in original Figure 4
+ord_terms <- terms_ord[order(-terms_ord$beta0),]
+```
+
+
+
+```{r}
+## Replicating Figure 3 and Figure 4 of the original paper
+# Figure 3 replicate:
+fig3 <- ggplot(ord_terms)+
+        geom_line(aes(x=1:654, y=beta0, color = "Pure Behavior 0"))+
+        geom_line(aes(x=1:654, y=beta1, color = "Pure Behavior 1"))+
+        scale_y_continuous(expand = c(0,0)) +
+        scale_x_continuous(expand = c(0,0)) +
+        labs(legend.position = c(.95, .95), colour = "", x = "", y = "")+
+        theme(panel.grid.major = element_blank(), panel.background = element_blank(),
+        axis.line = element_line(colour = "black"), legend.position = c(0.5, 0.9), 
+        panel.grid =element_blank(), panel.border = element_blank())
+fig3
+```
+
+```{r}
+# Figure 4 replicates
+ap_types <- tidy(ceolda, matrix = "gamma")
+# Gamma is the ceo type distribution (theta)
+types <-subset(ap_types, topic==1)
+fig4A <- ggplot(types)+
+        geom_histogram(binwidth = 0.011, aes(gamma))+
+        scale_y_discrete(expand = c(0,0)) +
+        scale_x_continuous(expand = c(0,0)) +
+        theme_bw() + 
+        theme(axis.title=element_blank(), panel.grid = element_blank(), 
+        axis.line = element_line(colour = "black"))
+fig4A+ labs(title = "Frequency Distribution")
+
+fig4B <- ggplot(types,aes(x=gamma,y=cumsum(..count..)/1000))+
+  geom_histogram(fill="white", color="black", binwidth = 0.011)+
+  stat_bin(aes(y=cumsum(..count..)/1000), binwidth = 0.011)+
+        scale_y_continuous(expand = c(0,0)) +
+        scale_x_continuous(expand = c(0,0)) +
+        theme_bw() + 
+        theme(axis.title=element_blank(), panel.grid = element_blank(), 
+        axis.line = element_line(colour = "black"))
+fig4B+ labs(title = "Cumulative Distribution")
+```
+
+

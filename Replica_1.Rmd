@@ -1,0 +1,118 @@
+---
+title: "Replica 1 Code"
+author: Stefan P. Penczynski and Lingguo Xu
+output: pdf_document
+---
+
+```{r,  message=FALSE, `results = FALSE`}
+## This is a replication of the paper, code adopted from the original author
+library(quanteda) # for mananging and analying text data
+library(SnowballC) # collapsing words to their stem
+library(gtools) # general purpose
+library(refset) # providing subset with reference semetic
+library(randomForest) # obvious
+library(knitr) # kniting r code to pdf
+setwd("C:/Users/quest/OneDrive - The University of Melbourne/ECON90055/Replicas_Lin")
+set.seed(324789632) # for reproduction
+```
+
+```{r setup, include = FALSE, cache = FALSE}
+opts_chunk$set(fig.width = 4, fig.height = 3)
+```
+
+In experiments, subjects were asked to give their reason on their choice. In this replica, we intends to classify the resoning into 4 levels using random forest technique.
+
+```{r}
+## Data cleaning
+# Read data, SL is the original text file, d list keeps SL structure
+d <- read.delim("SL.txt", stringsAsFactors = FALSE, na.strings = ".")
+# There are many NA in variable of interest 'level', which is the level of 
+# reasoning We will only keep entries with non NA in level
+d <- d[! is.na(d$level),] 
+
+# Create corpus (cps) and document-feature-matrix
+# text copus, the original reasoning given by subjects
+cps <- corpus(d$message) 
+# Detele words and symbols that is meaningless
+mystop <- c(".",",","!","/","(",")","-",":","'","?","%",
+            "a","b","a's","b's","as","bs","A","B","black",
+            "white",stopwords("english") )
+
+# Important step, creating document-feature-matrix, where entry is the count
+# for each token (427 of them) used by the subject
+dfmat <- dfm(cps, remove = mystop, stem = TRUE)
+# Only keep tokens that have been used by more than 5 times from all 
+# subjects, which reduced the number of tokens to 114
+dfmat <- dfmat[, colSums(dfmat) >= 5]
+```
+
+
+```{r}
+## Create Word Cloud plot often seen in literature
+# topfeatures(dfmat, 100)
+# png(file="cloudSL.png", width=600, height = 600, pointsize = 24)
+textplot_wordcloud(dfmat, random_order = FALSE)
+```
+
+```{r}
+## Create test and training data
+train.prop <- .7 # use 70% of entries
+train.rows <- test.rows <- numeric(0) # set up rows selection
+# now randomly select 70% rows from each level of reasoning, the rest 30% 
+# will be used for testing
+for (tm in unique(d$treatment)) {
+  rows <- which (d$treatment == tm)
+  nr <- length(rows)
+  train.rows <- c(train.rows, sample(rows, floor(nr*train.prop)))
+  test.rows <- c(test.rows, setdiff(rows, train.rows))
+}
+train.rows <- train.rows[ ! is.na(d$level[train.rows])]
+test.rows <- train.rows[ ! is.na(d$level[test.rows])]
+
+# Now creating binding for training and test rows to dfmat
+dtr %r% d[train.rows,]
+dtest %r% d[test.rows,]
+
+# Two smaller matrix for training and testing: 348(total)=241(train)+107(test)
+dfmtr <- dfmat[train.rows,] 
+dfmtest <- dfmat [test.rows,]
+```
+
+Data is cleaned and sorted, now come random forest
+```{r}
+### Random forest
+## Training 
+# Regression, using reasoning as explantory variable, and level of true 
+# level of reasoning as predictor
+rf1 <- randomForest(x = as.matrix(dfmtr), y = dtr$level, 
+                    keep.forest = TRUE, importance = TRUE)
+# there will be a warning message, ignore 
+# View(rf1)
+
+#classification, factorize level of reasoning first
+rf2 <- randomForest(x = as.matrix(dfmtr), y = factor(dtr$level), 
+                    keep.forest = TRUE, importance = TRUE)
+#View(rf2)
+```
+
+```{r}
+## Prediction and test
+# Prediction from Regression and Classification
+# If accuracy is 100%, then only dignoal entries are non-zero
+predict(rf1, as.matrix(dfmtest)) -> rf1p
+round(rf1p, 0) -> rf1pround
+print(tab <- table(rf1pround, dtest$level))
+
+predict(rf2, as.matrix(dfmtest)) -> rf2p
+rf2pchar <- as.character(rf2p)
+rf2pnum <- as.numeric(rf2pchar)
+print(tab <- table(rf2pnum, dtest$level))
+
+# Tests
+#cor.test(rf1p,dtest$level)
+#print(summary(lm(dtest$level ~ 0+rf1p)))
+
+#cor.test(rf2pnum, dtest$level)
+#print(summary(lm(dtest$level~0+rf2pnum)))
+```
+

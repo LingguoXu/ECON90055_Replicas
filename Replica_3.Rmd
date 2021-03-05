@@ -1,0 +1,115 @@
+---
+title: "Replica 3 Code"
+author: Lingguo Xu
+output: pdf_document
+---
+
+```{r,  message=FALSE, `results = FALSE`}
+library(textir)
+library(distrom)
+library(gamlr)
+library(Matrix)
+library(stats)
+library(MASS)
+library(graphics)
+library(aod)
+library(topicmodels)
+library(randomForest)
+remove(list = ls())
+# Chagne this to the path with dataset 'congress109'
+setwd("C:/Users/quest/OneDrive - The University of Melbourne/ECON90055/Replicas_Lin")
+```
+
+
+```{r}
+## Load congress data, create document-count(term)-matrix
+load("congress109.rda")
+covars <- data.frame(gop=congress109Ideology$party=="R",
+					cscore=congress109Ideology$cs1)
+covars$cscore <- covars$cscore - tapply(covars$cscore,covars$gop,mean)[covars$gop+1]
+rownames(covars) <- rownames(congress109Ideology)
+```
+
+Now, we predict patisanship based on speech, calculate RMSE and record run time using MNIR, LDA and random forest
+
+```{r} 
+# DME algorithm
+start_time <- Sys.time()
+cl <- NULL # No cluster in Windows system
+# First step, fits multinomial logistic regression parameters under gamma 
+# lasso penalization on a factorized Poisson likelihood
+fitCS <- dmr(cl, covars, congress109Counts, gamma=1, nlambda=10)
+
+# Second step, calculates the MNIR Sufficient Reduction projection
+Z <- srproj(fitCS, congress109Counts)
+Xgop <- Z[,1]
+
+# Final step of MNIR, forward regression, from SR score to prediction
+logit <- glm(covars$gop ~  Xgop, family = "binomial")
+
+# Compute RMSE-root mean squre error
+Realgop <- as.integer(as.logical(covars$gop))
+RMSE_mnir <- sqrt(sum((Realgop-logit$fitted.values)^2)/length(Realgop))
+Rtime_mnir <- as.numeric(Sys.time()-start_time)
+cat("RMSE_mnir =", RMSE_mnir, "; Runtime =", Rtime_mnir, "sec")
+```
+
+```{r}
+## RMSE using LDA algorithm with VEM and Gibbs
+start_time <- Sys.time()
+# LDA with VEM, default setting
+gop_LDAVEM <- LDA(congress109Counts, k = 2, 
+                  control = list(seed = 1234))
+fitted_goplda <- gop_LDAVEM@gamma[,2]
+
+# RMSE
+RMSE_ldavem <- sqrt(sum((Realgop-fitted_goplda)^2)/length(Realgop))
+Rtime_ldavem <- as.numeric(Sys.time()-start_time)
+cat("RMSE_ldavem =", RMSE_ldavem, "; Runtime =", Rtime_ldavem , "sec")
+```
+
+```{r}
+# LDA with Gibbs, default setting
+start_time <- Sys.time()
+gop_LDAGibbs <- LDA(congress109Counts, k = 2, method = "Gibbs", control = list(seed = 1234))
+fitted_goplda <- gop_LDAGibbs@gamma[,2]
+
+# RMSE
+RMSE_ldaGibbs <- sqrt(sum((Realgop-fitted_goplda)^2)/length(Realgop))
+Rtime_ldaGibbs <- as.numeric(Sys.time()-start_time)
+cat("RMSE_ldaGibbs =", RMSE_ldaGibbs,"; Runtime =", Rtime_ldaGibbs , "sec")
+```
+
+```{r}
+## RMSE using random forest algorithm
+start_time <- Sys.time()
+# New document-term-matrix with gop as integer
+covars_rf <- covars
+covars_rf$gop <- Realgop
+
+# Percentage of training set, 0.5-0.9 does not make much difference
+trainperc <- 0.8 
+set.seed(17)
+# Get the size of training sets:
+data_size <- floor(nrow(covars_rf)*trainperc)
+# Generate a random sample of "data_size" indexes
+indexes <- sample(1:nrow(covars_rf), size = data_size)
+# Assign the data to the training and test sets
+training <- congress109Counts[indexes,]
+testing <- congress109Counts[-indexes,]
+train <- covars_rf[indexes,]
+test <- covars_rf[-indexes,]
+
+# Running random forest algorthm, default setting
+rf2 <- randomForest(x = as.matrix(training), y = factor(train$gop), 
+                    keep.forest = TRUE, importance = TRUE)
+# Prediction and RMSE
+predict(rf2, as.matrix(testing)) -> rf2p
+rf2pchar <- as.character(rf2p) # Change to character
+rf2pnum <- as.numeric(rf2pchar) # Change to integer
+
+RMSE_rf <- sqrt(sum((test$gop-rf2pnum)^2)/length(test$gop))
+Rtime_rf <- as.numeric(Sys.time()-start_time)
+
+cat("RMSE_rf =", RMSE_rf,"; Runtime =", Rtime_rf , "sec")
+```
